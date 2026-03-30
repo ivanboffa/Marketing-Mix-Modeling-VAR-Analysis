@@ -1,0 +1,118 @@
+# Install required packages (run once)
+# install.packages(c("vars", "lmtest", "aTSA", "urca", "gplots", "RColorBrewer"))
+#packages
+library(vars)
+library(lmtest)
+library(aTSA)
+library(gplots)
+library(RColorBrewer)
+
+# Load data
+ts_data <- read.csv(file.choose(), header = TRUE)
+
+# Data overview
+summary(ts_data)
+
+# Plot main variables over time
+plot(ts_data$Week, ts_data$LnSales, type="l", col="blue", lwd=5, xlab="weeks", ylab="LnSales", main="Sales over time")
+plot(ts_data$Week, ts_data$LnAdvertising, type="l", col="red", lwd=5, xlab="weeks", ylab="LnAdvertising", main="Advertising over time")
+plot(ts_data$Week, ts_data$LnPrice, type="l", col="darkgreen", lwd=5, xlab="weeks", ylab="LnPrice", main="Price over time")
+
+# Granger causality: Adv -> Sales
+grangmat.df        <- data.frame(matrix(0,nrow = 13, ncol=2))  
+names(grangmat.df) <- c("nlags","pval")
+for (nlags in 1:13){
+  grangout              <- grangertest(LnSales ~ LnAdvertising, order = nlags, data = ts_data)
+  grangmat.df[nlags,1]  <- nlags
+  grangmat.df[nlags,2]  <- grangout[2,4]
+  print(grangout)
+}
+
+# Granger causality: Price -> Sales
+grangmat.df        <- data.frame(matrix(0,nrow = 13, ncol=2))  
+names(grangmat.df) <- c("nlags","pval")
+for (nlags in 1:13){
+  grangout              <- grangertest(LnSales ~ LnPrice, order = nlags, data = ts_data)
+  grangmat.df[nlags,1]  <- nlags
+  grangmat.df[nlags,2]  <- grangout[2,4]
+  print(grangout)
+}
+
+# Unit root tests (ADF, PP, KPSS)
+
+# Sales
+adf.test(ts_data$LnSales, nlag = 2, output = TRUE)
+pp.test(ts_data$LnSales, output = TRUE)
+kpss.test(ts_data$LnSales, output = TRUE)
+
+# Advertising
+adf.test(ts_data$LnAdvertising, nlag = 2, output = TRUE)
+pp.test(ts_data$LnAdvertising, output = TRUE)
+kpss.test(ts_data$LnAdvertising, output = TRUE)
+
+# Price
+adf.test(ts_data$LnPrice, nlag = 2, output = TRUE)
+pp.test(ts_data$LnPrice, output = TRUE)
+kpss.test(ts_data$LnPrice, output = TRUE)
+
+# VAR Model Setup
+
+# Define variables
+endo_vars = ts_data[, c("LnSales", "LnAdvertising", "LnPrice", "LnCompAdvertising", "LnCompPrice")]
+exo_vars = as.matrix(ts_data[, c("Qrtr1", "Qrtr2", "Qrtr3")])    
+
+# Select optimal lags 
+lag_selection <- VARselect(endo_vars, lag.max = 13, type = "both", exogen = exo_vars)
+print(lag_selection$selection)
+
+# Estimate VAR model (using p=1 based on BIC/SC criterion)
+var_model <- VAR(endo_vars, p = 1, type = "both", exogen = exo_vars)
+summary(var_model, "LnSales")
+
+
+
+
+# Cumulative IRFs (68% CI)
+
+# 1. Shock from own Sales
+irf_sales_cum <- irf(var_model, impulse = "LnSales", response = "LnSales", n.ahead = 13,
+                     ortho = TRUE, cumulative = TRUE, boot = TRUE, ci = 0.68, runs = 500)  
+plot(irf_sales_cum, main = "Cumulative impact of Own Sales on Sales")
+
+# 2. Shock from Advertising
+irf_adv_cum <- irf(var_model, impulse = "LnAdvertising", response = "LnSales", n.ahead = 13,
+                   ortho = TRUE, cumulative = TRUE, boot = TRUE, ci = 0.68, runs = 500)  
+plot(irf_adv_cum, main = "Cumulative impact of Advertising on Sales")
+
+# 3. Shock from Price
+irf_price_cum <- irf(var_model, impulse = "LnPrice", response = "LnSales", n.ahead = 13,
+                     ortho = TRUE, cumulative = TRUE, boot = TRUE, ci = 0.68, runs = 500)  
+plot(irf_price_cum, main = "Cumulative impact of Price on Sales")
+
+# 4. Shock from Comp. Advertising
+irf_compadv_cum <- irf(var_model, impulse = "LnCompAdvertising", response = "LnSales", n.ahead = 13,
+                       ortho = TRUE, cumulative = TRUE, boot = TRUE, ci = 0.68, runs = 500)  
+plot(irf_compadv_cum, main = "Cumulative impact of Comp. Adv. on Sales")
+
+# 5. Shock from Comp. Price
+irf_compprice_cum <- irf(var_model, impulse = "LnCompPrice", response = "LnSales", n.ahead = 13,
+                         ortho = TRUE, cumulative = TRUE, boot = TRUE, ci = 0.68, runs = 500)  
+plot(irf_compprice_cum, main = "Cumulative impact of Comp. Price on Sales")
+
+# FEVD (Forecast Error Variance Decomposition)
+
+fevd_sales <- fevd(var_model, n.ahead = 13)
+
+# Print weeks 1, 6, and 13 for all variables to check system dynamics
+lapply(fevd_sales, function(x) x[c(1, 6, 13), ])
+
+# Extract week 13 data for the final stacked barplot
+fevd_week13 <- sapply(fevd_sales, function(x) x[13, ])
+
+# Stacked barplot at week 13
+barplot(fevd_week13, 
+        col = brewer.pal(5, "YlOrRd"), 
+        main = "Variance Decomposition at Week 13",
+        las = 2, 
+        legend.text = rownames(fevd_week13), 
+        args.legend = list(x = "topright", bty = "n", cex = 0.8))
